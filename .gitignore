@@ -1,0 +1,13 @@
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Build files
+bin/
+obj/
+
+# Local secrets
+appsettings.Local.json
+appsettings.*.Local.json

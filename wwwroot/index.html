@@ -1,0 +1,403 @@
+﻿
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DotNet AI Chatbot</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f1f5f9;
+            color: #1e293b;
+        }
+
+        .app {
+            max-width: 800px;
+            height: 90vh;
+            margin: 5vh auto;
+            background: white;
+            border-radius: 16px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 30px #00000012;
+            overflow: hidden;
+        }
+
+        header {
+            background: #2563eb;
+            color: white;
+            padding: 20px;
+        }
+
+            header h2 {
+                margin: 0 0 6px;
+            }
+
+            header p {
+                margin: 0;
+                font-size: 14px;
+            }
+
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            padding: 12px 15px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+            .toolbar select {
+                flex: 1;
+                min-width: 0;
+                padding: 10px;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                background: white;
+            }
+
+        #chatBox {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .message {
+            max-width: 85%;
+            padding: 12px 15px;
+            margin: 10px 0;
+            border-radius: 12px;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            line-height: 1.5;
+        }
+
+        .user {
+            background: #dbeafe;
+            margin-left: auto;
+        }
+
+        .bot {
+            background: #f1f5f9;
+            margin-right: auto;
+        }
+
+        .composer {
+            display: flex;
+            gap: 10px;
+            padding: 15px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        input {
+            flex: 1;
+            min-width: 0;
+            padding: 13px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        button {
+            border: none;
+            padding: 12px 18px;
+            border-radius: 8px;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+        }
+
+            button:disabled {
+                opacity: 0.6;
+                cursor: wait;
+            }
+
+        #status {
+            padding: 0 15px 10px;
+            color: #64748b;
+            font-size: 13px;
+        }
+
+        @media (max-width: 600px) {
+            .app {
+                height: 100vh;
+                margin: 0;
+                border-radius: 0;
+            }
+
+            .composer {
+                padding: 10px;
+            }
+
+            button {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <main class="app">
+        <header>
+            <h2>DotNet AI Chatbot</h2>
+            <p>Powered by C# .NET 8 and Ollama</p>
+        </header>
+
+        <div class="toolbar">
+            <button id="newChatButton" type="button">+ New Chat</button>
+
+            <select id="conversationSelect" aria-label="Saved conversations">
+                <option value="">Select a saved chat</option>
+            </select>
+        </div>
+
+        <section id="chatBox" aria-live="polite">
+            <div class="message bot">
+                Hello! Ask me anything.
+            </div>
+        </section>
+
+        <div id="status">Ready</div>
+
+        <form id="chatForm" class="composer">
+            <input id="messageInput"
+                   type="text"
+                   placeholder="Type your message..."
+                   maxlength="2000"
+                   autocomplete="off"
+                   required />
+
+            <button id="sendButton" type="submit">Send</button>
+        </form>
+    </main>
+
+    <script>
+        const chatBox = document.getElementById("chatBox");
+        const form = document.getElementById("chatForm");
+        const input = document.getElementById("messageInput");
+        const sendButton = document.getElementById("sendButton");
+        const status = document.getElementById("status");
+        const newChatButton = document.getElementById("newChatButton");
+        const conversationSelect =
+            document.getElementById("conversationSelect");
+
+        const storageKey = "dotnetAIChatbotConversationId";
+        let conversationId = null;
+        let busy = false;
+
+        function addMessage(text, sender) {
+            const element = document.createElement("div");
+            element.className = "message " + sender;
+            element.textContent = text;
+            chatBox.appendChild(element);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function clearChat() {
+            chatBox.replaceChildren();
+        }
+
+        function showWelcome() {
+            clearChat();
+            addMessage("Hello! Ask me anything.", "bot");
+        }
+
+        function setBusy(value) {
+            busy = value;
+            sendButton.disabled = value;
+            newChatButton.disabled = value;
+            conversationSelect.disabled = value;
+        }
+
+        async function loadConversations() {
+            const response = await fetch("/api/Chat/conversations");
+
+            if (!response.ok) {
+                throw new Error("Unable to load saved conversations.");
+            }
+
+            const conversations = await response.json();
+            const selectedId = conversationId;
+
+            conversationSelect.replaceChildren();
+
+            const defaultOption = document.createElement("option");
+            defaultOption.value = "";
+            defaultOption.textContent = "Select a saved chat";
+            conversationSelect.appendChild(defaultOption);
+
+            for (const conversation of conversations) {
+                const option = document.createElement("option");
+                option.value = conversation.id;
+                option.textContent =
+                    conversation.title || ("Chat " + conversation.id);
+
+                conversationSelect.appendChild(option);
+            }
+
+            if (selectedId !== null) {
+                conversationSelect.value = String(selectedId);
+            }
+        }
+
+        async function loadMessages(id) {
+            status.textContent = "Loading conversation...";
+
+            const response = await fetch(
+                `/api/Chat/${encodeURIComponent(id)}/messages?page=1&pageSize=20`
+            );
+
+            if (!response.ok) {
+                throw new Error("Unable to load conversation messages.");
+            }
+
+            const messages = await response.json();
+
+            clearChat();
+
+            if (messages.length === 0) {
+                addMessage("No messages in this conversation yet.", "bot");
+            } else {
+                for (const message of messages) {
+                    addMessage(
+                        message.content,
+                        message.role === "user" ? "user" : "bot"
+                    );
+                }
+            }
+
+            chatBox.scrollTop = chatBox.scrollHeight;
+            status.textContent = "Conversation loaded.";
+        }
+
+        async function startNewChat() {
+            if (busy) return;
+
+            conversationId = null;
+            localStorage.removeItem(storageKey);
+            conversationSelect.value = "";
+            showWelcome();
+            status.textContent = "New chat ready.";
+            input.focus();
+        }
+
+        newChatButton.addEventListener("click", startNewChat);
+
+        conversationSelect.addEventListener("change", async function () {
+            if (busy) return;
+
+            const selectedId = conversationSelect.value;
+
+            if (!selectedId) return;
+
+            setBusy(true);
+
+            try {
+                conversationId = Number(selectedId);
+                localStorage.setItem(storageKey, String(conversationId));
+                await loadMessages(conversationId);
+            } catch (error) {
+                status.textContent = error.message;
+            } finally {
+                setBusy(false);
+                input.focus();
+            }
+        });
+
+        form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+
+            const message = input.value.trim();
+
+            if (!message || busy) return;
+
+            addMessage(message, "user");
+            input.value = "";
+            setBusy(true);
+            status.textContent = "AI is thinking...";
+
+            try {
+                const response = await fetch("/api/Chat", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        conversationId: conversationId
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(
+                        data.error || "Unable to get an AI response."
+                    );
+                }
+
+                conversationId = data.conversationId;
+
+                localStorage.setItem(
+                    storageKey,
+                    String(conversationId)
+                );
+
+                addMessage(
+                    data.reply || "No response received.",
+                    "bot"
+                );
+
+                await loadConversations();
+
+                status.textContent =
+                    "Ready | Conversation ID: " + conversationId;
+            } catch (error) {
+                addMessage("Error: " + error.message, "bot");
+                status.textContent =
+                    "Request failed. Please check the API and try again.";
+            } finally {
+                setBusy(false);
+                input.focus();
+            }
+        });
+
+        async function initializeChat() {
+            try {
+                await loadConversations();
+
+                const savedId = localStorage.getItem(storageKey);
+
+                if (savedId && /^\d+$/.test(savedId)) {
+                    conversationId = Number(savedId);
+
+                    try {
+                        await loadMessages(conversationId);
+                        conversationSelect.value = String(conversationId);
+                    } catch {
+                        conversationId = null;
+                        localStorage.removeItem(storageKey);
+                        showWelcome();
+                        status.textContent =
+                            "Previous chat could not be restored.";
+                    }
+                } else {
+                    showWelcome();
+                    status.textContent = "Ready for a new chat.";
+                }
+            } catch (error) {
+                showWelcome();
+                status.textContent =
+                    "Unable to load saved chats. Check the API.";
+            }
+        }
+
+        initializeChat();
+    </script>
+</body>
+</html>
